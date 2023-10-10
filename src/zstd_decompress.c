@@ -659,6 +659,20 @@ static void decompress_data(frame_context_t *const ctx, ostream_t *const out,
 }
 /******* END FRAME DECODING ***************************************************/
 
+static void write_file(const char* path, const u8* ptr, size_t size)
+{
+    FILE* const f = fopen(path, "wb");
+//    if (!f) ERR_OUT("failed to open file %s \n", path);
+
+    size_t written = 0;
+    while (written < size) {
+        written += fwrite(ptr+written, 1, size, f);
+//        if (ferror(f)) ERR_OUT("error while writing file %s\n", path);
+    }
+
+    fclose(f);
+}
+
 /******* BLOCK DECOMPRESSION **************************************************/
 static void decompress_block(frame_context_t *const ctx, ostream_t *const out,
                              istream_t *const in) {
@@ -671,6 +685,8 @@ static void decompress_block(frame_context_t *const ctx, ostream_t *const out,
     // Part 1: decode the literals block
     u8 *literals = NULL;
     const size_t literals_size = decode_literals(ctx, in, &literals);
+    printf("literals size: %ld bytes\n", literals_size);
+    write_file("decoded_literals.binary", literals, literals_size);
 
     // Part 2: decode the sequences block
     sequence_command_t *sequences = NULL;
@@ -852,8 +868,10 @@ static size_t decode_literals_compressed(frame_context_t *const ctx,
 
     size_t symbols_decoded;
     if (num_streams == 1) {
+        printf("1 stream1\n");
         symbols_decoded = HUF_decompress_1stream(&ctx->literals_dtable, &lit_stream, &huf_stream);
     } else {
+        printf("4 streams\n");
         symbols_decoded = HUF_decompress_4stream(&ctx->literals_dtable, &lit_stream, &huf_stream);
     }
 
@@ -1884,7 +1902,12 @@ static size_t HUF_decompress_4stream(const HUF_dtable *const dtable,
     total_output += HUF_decompress_1stream(dtable, out, &in2);
     total_output += HUF_decompress_1stream(dtable, out, &in3);
     total_output += HUF_decompress_1stream(dtable, out, &in4);
-
+/*
+    for (size_t i = 0; i < total_output; i++) {
+      u8 *const ptr = out->ptr[i];
+      printf("sdf %d\n", out->ptr[i]);
+    }
+*/
     return total_output;
 }
 
