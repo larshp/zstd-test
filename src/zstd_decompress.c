@@ -659,6 +659,20 @@ static void decompress_data(frame_context_t *const ctx, ostream_t *const out,
 }
 /******* END FRAME DECODING ***************************************************/
 
+static void write_file(const char* path, const u8* ptr, size_t size)
+{
+    FILE* const f = fopen(path, "wb");
+//    if (!f) ERR_OUT("failed to open file %s \n", path);
+
+    size_t written = 0;
+    while (written < size) {
+        written += fwrite(ptr+written, 1, size, f);
+//        if (ferror(f)) ERR_OUT("error while writing file %s\n", path);
+    }
+
+    fclose(f);
+}
+
 /******* BLOCK DECOMPRESSION **************************************************/
 static void decompress_block(frame_context_t *const ctx, ostream_t *const out,
                              istream_t *const in) {
@@ -671,11 +685,17 @@ static void decompress_block(frame_context_t *const ctx, ostream_t *const out,
     // Part 1: decode the literals block
     u8 *literals = NULL;
     const size_t literals_size = decode_literals(ctx, in, &literals);
+    printf("literals size: %ld bytes\n", literals_size);
+    write_file("decoded_literals.binary", literals, literals_size);
 
     // Part 2: decode the sequences block
     sequence_command_t *sequences = NULL;
-    const size_t num_sequences =
-        decode_sequences(ctx, in, &sequences);
+    const size_t num_sequences = decode_sequences(ctx, in, &sequences);
+
+    for (size_t i = 0; i < num_sequences; i++) {
+      const sequence_command_t seq = sequences[i];
+      printf("sequence %ld: %d, %d, %d\n", i, seq.literal_length, seq.match_length, seq.offset);
+    }
 
     // Part 3: combine literals and sequence commands to generate output
     execute_sequences(ctx, out, literals, literals_size, sequences,
@@ -852,8 +872,10 @@ static size_t decode_literals_compressed(frame_context_t *const ctx,
 
     size_t symbols_decoded;
     if (num_streams == 1) {
+        printf("1 stream1\n");
         symbols_decoded = HUF_decompress_1stream(&ctx->literals_dtable, &lit_stream, &huf_stream);
     } else {
+        printf("4 streams\n");
         symbols_decoded = HUF_decompress_4stream(&ctx->literals_dtable, &lit_stream, &huf_stream);
     }
 
@@ -1074,12 +1096,15 @@ static void decompress_sequences(frame_context_t *const ctx, istream_t *in,
     // Offsets
     // Match Lengths"
     // Update the tables we have stored in the context
+    printf("LITERAL_LENGTH,\n");
     decode_seq_table(&ctx->ll_dtable, in, seq_literal_length,
                      (compression_modes >> 6) & 3);
 
+    printf("OFFSET,\n");
     decode_seq_table(&ctx->of_dtable, in, seq_offset,
                      (compression_modes >> 4) & 3);
 
+    printf("MATCH LENGTH,\n");
     decode_seq_table(&ctx->ml_dtable, in, seq_match_length,
                      (compression_modes >> 2) & 3);
 
@@ -1460,8 +1485,13 @@ void parse_dictionary(dictionary_t *const dict, const void *src,
     // little-endian each, for a total of 12 bytes. Each recent offset must have
     // a value < dictionary size."
     decode_huf_table(&dict->literals_dtable, &in);
+    printf("dictionary, OFFSETS,\n");
+    printf("dictionary, OFFSETS,\n");
+    printf("dictionary, OFFSETS,\n");
     decode_seq_table(&dict->of_dtable, &in, seq_offset, seq_fse);
+    printf("MATCH LENGTH,\n");
     decode_seq_table(&dict->ml_dtable, &in, seq_match_length, seq_fse);
+    printf("LITERAL LENGTH,\n");
     decode_seq_table(&dict->ll_dtable, &in, seq_literal_length, seq_fse);
 
     // Read in the previous offset history
@@ -1884,7 +1914,12 @@ static size_t HUF_decompress_4stream(const HUF_dtable *const dtable,
     total_output += HUF_decompress_1stream(dtable, out, &in2);
     total_output += HUF_decompress_1stream(dtable, out, &in3);
     total_output += HUF_decompress_1stream(dtable, out, &in4);
-
+/*
+    for (size_t i = 0; i < total_output; i++) {
+      u8 *const ptr = out->ptr[i];
+      printf("sdf %d\n", out->ptr[i]);
+    }
+*/
     return total_output;
 }
 
@@ -2193,6 +2228,7 @@ static void FSE_init_dtable(FSE_dtable *const dtable,
 /// use the decoded frequencies to initialize a decoding table.
 static void FSE_decode_header(FSE_dtable *const dtable, istream_t *const in,
                                 const int max_accuracy_log) {
+    printf("  FSE_decode_header()\n");
     // "An FSE distribution table describes the probabilities of all symbols
     // from 0 to the last present one (included) on a normalized scale of 1 <<
     // Accuracy_Log .
@@ -2209,6 +2245,7 @@ static void FSE_decode_header(FSE_dtable *const dtable, istream_t *const in,
     // and match lengths is 9, and for offsets is 8. Higher values are
     // considered errors."
     const int accuracy_log = 5 + IO_read_bits(in, 4);
+    printf("  accuracy_log: %d\n", accuracy_log);
     if (accuracy_log > max_accuracy_log) {
         ERROR("FSE accuracy too large");
     }
@@ -2227,6 +2264,7 @@ static void FSE_decode_header(FSE_dtable *const dtable, istream_t *const in,
     // 0 to 98) use only 7 bits, values from 99 to 156 use 8 bits. "
 
     i32 remaining = 1 << accuracy_log;
+    printf("  remaining: %d\n", remaining);
     i16 frequencies[FSE_MAX_SYMBS];
 
     int symb = 0;
@@ -2282,6 +2320,12 @@ static void FSE_decode_header(FSE_dtable *const dtable, istream_t *const in,
         }
     }
     IO_align_stream(in);
+
+    printf("  number of frequencies: %d\n  ", symb);
+    for (int i = 0; i < symb; i++) {
+      printf("%d, ", frequencies[i]);
+    }
+    printf("\n");
 
     // "When last symbol reaches cumulated total of 1 << Accuracy_Log, decoding
     // is complete. If the last symbol makes cumulated total go above 1 <<
